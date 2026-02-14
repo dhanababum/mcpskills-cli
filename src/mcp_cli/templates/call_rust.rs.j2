@@ -1,0 +1,101 @@
+// Call MCP tool on server '{{ server_name }}'.
+// Dependencies: ureq, serde_json
+//   cargo install cargo-script  OR  use a Cargo.toml with:
+//     [dependencies]
+//     ureq = "2"
+//     serde_json = "1"
+// Usage: cargo run -- <tool_name> [json_args]
+
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+use std::process;
+
+const SERVER: &str = "{{ server_name }}";
+
+fn creds_path() -> PathBuf {
+    let home = env::var("HOME").unwrap_or_else(|_| ".".into());
+    PathBuf::from(home).join(".mcps").join("credentials")
+}
+
+fn load_credentials() -> (String, String) {
+    let text = fs::read_to_string(creds_path()).unwrap_or_else(|e| {
+        eprintln!("Cannot read credentials: {}", e);
+        process::exit(1);
+    });
+    let header = format!("[{}]", SERVER);
+    let mut in_section = false;
+    let (mut url, mut token) = (String::new(), String::new());
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed == header {
+            in_section = true;
+            continue;
+        }
+        if in_section && trimmed.starts_with('[') {
+            break;
+        }
+        if in_section {
+            if let Some((k, v)) = trimmed.split_once('=') {
+                match k.trim() {
+                    "url" => url = v.trim().to_string(),
+                    "token" => token = v.trim().to_string(),
+                    _ => {}
+                }
+            }
+        }
+    }
+    if url.is_empty() || token.is_empty() {
+        eprintln!("Missing url or token for [{}]", SERVER);
+        process::exit(1);
+    }
+    if !url.ends_with('/') {
+        url.push('/');
+    }
+    (url, token)
+}
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        eprintln!("Usage: {} <tool_name> [json_args]", args[0]);
+        process::exit(1);
+    }
+    let tool_name = &args[1];
+    let tool_args: serde_json::Value = if args.len() > 2 {
+        serde_json::from_str(&args[2]).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+    let (url, token) = load_credentials();
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": tool_args},
+        "id": 1
+    });
+    let resp = ureq::post(&url)
+        .set("Authorization", &format!("Bearer {}", token))
+        .set("Content-Type", "application/json")
+        .set("Accept", "application/json, text/event-stream")
+        .set("MCP-Protocol-Version", "2025-06-18")
+        .send_string(&body.to_string())
+        .unwrap_or_else(|e| {
+            eprintln!("Request failed: {}", e);
+            process::exit(1);
+        });
+    let text = resp.into_string().unwrap_or_default();
+    for line in text.lines() {
+        let data = if line.starts_with("data:") { line[5..].trim() } else { line.trim() };
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        if let Ok(obj) = serde_json::from_str::<serde_json::Value>(data) {
+            if obj.get("result").is_some() || obj.get("error").is_some() {
+                println!("{}", serde_json::to_string_pretty(&obj).unwrap());
+                return;
+            }
+        }
+    }
+    println!("{}", text);
+}

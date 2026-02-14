@@ -1,0 +1,21 @@
+---
+name: {{ server_name }}-{{ tool.name }}
+description: MCP tool {{ tool.name }} from {{ server_name }}. {{ tool.description }}
+---
+
+# {{ tool.name }}
+
+{{ tool.description | default("No description.", true) }}
+{% if tool.params %}
+
+**Parameters:**
+{% for p in tool.params %}
+- `{{ p.name }}` ({{ p.type }}, {{ p.required }}): {{ p.description | default("-", true) }}
+{% endfor %}
+{% endif %}
+
+**Execute:**
+```{{ script_lang }}
+{{ script_bin }} {{ skill_path }}/scripts/call.{{ script_ext }} {{ tool.name }}{% if tool.required_params %} '{{ tool.example_args }}'{% endif %}
+
+```

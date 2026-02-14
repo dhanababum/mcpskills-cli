@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -e
+SERVER="{{ server_name }}"
+CREDS="${HOME}/.mcps/credentials"
+if [[ ! -f "$CREDS" ]]; then
+  echo "Missing $CREDS" >&2
+  exit 1
+fi
+get_ini() {
+  local section="$1" key="$2"
+  awk -v S="\\[$section\\]" -v K="$key" '
+    $0 ~ S { found=1; next }
+    found && /^\[/ { exit }
+    found && $0 ~ "^" K "[[:space:]]*=" { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
+  ' "$CREDS"
+}
+URL=$(get_ini "$SERVER" "url")
+TOKEN=$(get_ini "$SERVER" "token")
+if [[ -z "$URL" || -z "$TOKEN" ]]; then
+  echo "Missing url or token for [$SERVER] in $CREDS" >&2
+  exit 1
+fi
+[[ "$URL" != */ ]] && URL="$URL/"
+TOOL="$1"
+ARGS="${2:-{}}"
+if [[ -z "$TOOL" ]]; then
+  echo "Usage: $0 <tool_name> [json_args]" >&2
+  exit 1
+fi
+BODY=$(python3 -c "
+import json, sys
+name, raw = sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else '{}'
+try: args = json.loads(raw)
+except: args = {}
+print(json.dumps({'jsonrpc':'2.0','method':'tools/call','params':{'name':name,'arguments':args},'id':1}))
+" "$TOOL" "$ARGS")
+RESPONSE=$(curl -s --max-time 30 -X POST "$URL" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "MCP-Protocol-Version: 2025-06-18" \
+  -d "$BODY")
+echo "$RESPONSE" | python3 -c "
+import json, sys
+text = sys.stdin.read().strip()
+for line in text.split('\n'):
+    if line.startswith('data:'):
+        line = line[5:].strip()
+    if not line or line == '[DONE]': continue
+    try:
+        obj = json.loads(line)
+        if 'result' in obj or 'error' in obj:
+            print(json.dumps(obj, indent=2))
+            sys.exit(0)
+    except json.JSONDecodeError: pass
+print(text)
+"

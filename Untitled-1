@@ -1,0 +1,1 @@
+mcp-cli --url http://localhost:8032/mcp/8bb059d5-0115-4c08-b994-25c26695b027 --token mcp_token_Na7kQzvA2RxhzvAjT9P3Q0rPiaxlIHUnXiPHCoeMrhE --name neo4j-movie --script python --output .cursor/skills
